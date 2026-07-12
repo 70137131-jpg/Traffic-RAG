@@ -88,6 +88,10 @@ DEFAULT_DOCUMENT = os.environ.get("DEFAULT_DOCUMENT", "traffic_laws.md")
 EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "local").lower()  # local | google
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 GOOGLE_EMBEDDING_MODEL = os.environ.get("GOOGLE_EMBEDDING_MODEL", "models/text-embedding-004")
+# Torch device for the local embedder/reranker: "" (auto), "cpu", "cuda", "mps".
+# Forking servers (gunicorn) on macOS must use "cpu" — initializing Metal/MPS in a
+# forked worker crashes. Production (Linux) is CPU-only, so auto == cpu there.
+EMBEDDING_DEVICE = os.environ.get("EMBEDDING_DEVICE", "").strip()
 # Vector dimension must match the embedding model: 384 for all-MiniLM-L6-v2,
 # 768 for Google text-embedding-004.
 EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 768 if EMBEDDING_PROVIDER == "google" else 384)
@@ -171,7 +175,7 @@ class RAGService:
                 self.embedder = self._build_embedder()
                 if RERANK_ENABLED and self.reranker is None:
                     from sentence_transformers import CrossEncoder
-                    self.reranker = CrossEncoder(RERANKER_MODEL)
+                    self.reranker = CrossEncoder(RERANKER_MODEL, device=EMBEDDING_DEVICE or None)
                 if self.llm is None:
                     self.llm = ChatGoogleGenerativeAI(
                         model=LLM_MODEL, temperature=0,
@@ -199,8 +203,9 @@ class RAGService:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
             logger.info("Using Google embeddings: %s", GOOGLE_EMBEDDING_MODEL)
             return GoogleGenerativeAIEmbeddings(model=GOOGLE_EMBEDDING_MODEL)
-        logger.info("Using local embeddings: %s", EMBEDDING_MODEL)
-        return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+        logger.info("Using local embeddings: %s (device=%s)", EMBEDDING_MODEL, EMBEDDING_DEVICE or "auto")
+        model_kwargs = {"device": EMBEDDING_DEVICE} if EMBEDDING_DEVICE else {}
+        return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL, model_kwargs=model_kwargs)
 
     # ---- Ingestion -------------------------------------------------------
 
@@ -277,6 +282,14 @@ class RAGService:
         }
 
     def _retrieve(self, document_id, query):
+        return self.rank_candidates(document_id, query, RERANK_TOP_K)
+
+    def rank_candidates(self, document_id, query, top_k):
+        """Hybrid search + optional rerank, returning the top_k ranked chunks.
+
+        Used by answering (top_k=RERANK_TOP_K) and by the eval harness (larger
+        top_k, to measure rank-based metrics like MRR).
+        """
         query_embedding = self.embedder.embed_query(query)
         candidates = pg_store.hybrid_search(
             document_id, query, query_embedding,
@@ -285,11 +298,11 @@ class RAGService:
         if not candidates:
             return []
         if not RERANK_ENABLED or self.reranker is None:
-            return candidates[:RERANK_TOP_K]
+            return candidates[:top_k]
         pairs = [[query, c["content"]] for c in candidates]
         scores = self.reranker.predict(pairs)
         ranked = sorted(zip(candidates, scores), key=lambda item: item[1], reverse=True)
-        return [c for c, _score in ranked[:RERANK_TOP_K]]
+        return [c for c, _score in ranked[:top_k]]
 
     @retry(
         reraise=True,

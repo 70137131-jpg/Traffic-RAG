@@ -182,34 +182,37 @@ Deliberately lightweight — no per-tenant isolation needed:
 
 ## Phased plan (highest ROI first)
 
-### Phase 0 — Stabilize (do regardless, ~hours, no architecture change)
-- Pin all dependencies with a lockfile (`uv`/`poetry`); commit it.
-- Migrate off deprecated LangChain imports (`langchain-huggingface`,
-  `langchain-chroma`) — or skip straight to Gemini embeddings in Phase 1.
-- Add gunicorn/uvicorn; stop using `app.run()` in prod.
-- Structured logging + `/health`.
-- Timeout + retry on the Gemini call.
-- Cap chunk sizes (#8) and switch fusion to RRF (#9).
+### Phase 0 — Stabilize ✅ DONE
+- Pinned dependencies in `requirements.txt` + full `requirements.lock`.
+- Migrated off deprecated LangChain imports (`langchain-huggingface`; Chroma later removed entirely in Phase 1).
+- gunicorn + `Procfile`; `app.run()` is dev-only.
+- Request-scoped structured logging + `/health`.
+- Gemini call: timeout + tenacity retries that skip permanent errors.
+- Chunk-size cap after header split + RRF fusion; config-driven knobs.
 
-### Phase 1 — De-globalize onto Postgres (the real unlock)
-- Provision managed Postgres; enable `pgvector`.
-- Schema: `documents`, `chunks` (with `embedding` + `tsvector`).
-- Swap embeddings to Google `text-embedding-004`.
-- Rewrite retrieval as SQL: pgvector semantic + `tsvector` keyword, fused with RRF.
-- Delete the singleton and the global `RLock`; handlers become stateless.
-- Uploads: ingest into Postgres with a status field; UI polls status.
+### Phase 1 — De-globalize onto Postgres ✅ DONE
+- Schema applied idempotently at boot via `pg_store.ensure_schema()`; reference DDL in `migrations/001_init.sql`. Extension bootstrap handled up front to avoid a concurrent-`CREATE EXTENSION` race.
+- `documents` + `chunks` (with `embedding vector` + generated `tsvector`); partial unique index enforces one active document.
+- Retrieval rewritten as SQL: pgvector semantic + `tsvector` keyword, fused with RRF **in a single query** (`pg_store.hybrid_search`).
+- Singleton doc-state and the global `RLock` removed — `RAGService` is stateless over Postgres; verified 20 concurrent retrievals + shared state across 2 gunicorn workers.
+- Uploads ingest into Postgres with a `status` field; content-hash reuse avoids re-embedding identical docs.
+- **Embeddings:** kept pluggable (`EMBEDDING_PROVIDER=local|google`). Default stays local HuggingFace so the pipeline is testable now; flip to Google `text-embedding-004` (set `EMBEDDING_DIM=768`, re-ingest) once the `GOOGLE_API_KEY` is rotated.
+- **Deferred to Phase 2:** provision the *managed* Postgres (Neon/Supabase) and point `DATABASE_URL` at it — the code is DB-agnostic and already runs on standard Postgres+pgvector (validated locally on pg16 + pgvector 0.8.5). UI status-polling on upload is still a small front-end follow-up.
 
-### Phase 2 — Serverless deploy & harden
-- Dockerfile; deploy to Cloud Run (or equivalent) with scale-to-zero.
-- Secrets from the platform's secret manager.
-- AuthN (SSO/IAP) + basic rate limiting + CORS lockdown.
-- `/ready` probe (checks Postgres + Gemini).
+### Phase 2 — Serverless deploy & harden ✅ code DONE (deploy pending an account)
+- **`Dockerfile`** — lean production image: CPU-only torch, embedding+reranker models **baked in** and run offline (`HF_HUB_OFFLINE=1`), non-root user, `$PORT` bind, `HEALTHCHECK`. `.dockerignore` keeps the context small.
+- **App hardening** (verified locally under gunicorn): security headers (nosniff/frame/referrer/HSTS), configurable **CORS lockdown**, **per-IP rate limiting** (flask-limiter; probes exempt; 429 confirmed), optional **`APP_API_KEY`** gate for the JSON API, and **ProxyFix** for running behind the platform proxy.
+- **Robustness fixes found during verification:** schema is ensured at **startup** (so `/ready` & `/documents` work before the first `/ask`), and `EMBEDDING_DEVICE` lets forking servers avoid the macOS Metal/MPS `fork()` crash (Linux is CPU-only, so unaffected).
+- **`/ready`** probe (DB reachability + active doc) — done in Phase 1.
+- **[docs/DEPLOYMENT.md](DEPLOYMENT.md)** — Cloud Run + Neon/Supabase Postgres + Secret Manager + IAP walkthrough and full env reference.
+- **Pending (needs an account, not code):** build/push the image, provision managed Postgres, wire secrets, deploy behind IAP. The image couldn't be built locally (no Docker here); the `Dockerfile` is written but unbuilt.
 
-### Phase 3 — Operate & measure
-- Metrics + tracing dashboards.
-- Golden Q&A set + ragas/promptfoo eval in CI with a regression gate.
-- Add a managed reranker (Cohere/Jina) **only if** eval shows it's needed.
-- CI/CD pipeline (test → eval → build → deploy).
+### Phase 3 — Operate & measure ✅ core DONE
+- **Eval harness** ([eval/run_eval.py](../eval/run_eval.py)) — golden Q&A set ([eval/dataset.json](../eval/dataset.json), 12 cases across all 7 titles) scoring retrieval hit@1/hit@k/MRR against the real pgvector pipeline. Runs **without the LLM** (retrieval-only), so it works despite the leaked key; optional `--with-answers` scores answer faithfulness once a key is live. **Regression gate:** exits non-zero if hit@k < threshold (verified: exit 0 pass / exit 1 fail). Local run: hit@3 = 1.00, hit@1 = 0.92, MRR = 0.958.
+- **Metrics** — Prometheus `/metrics` (prometheus-flask-exporter): per-endpoint request latency + counts, plus a custom `rag_ask_total{outcome}` counter. Exempt from rate limiting/auth. (Tracing via OpenTelemetry/LangSmith is the remaining nice-to-have.)
+- **CI** ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) — spins up `pgvector/pgvector:pg16`, runs the eval gate on every push/PR, and **builds the Docker image** (the build validation that couldn't run locally without Docker).
+- **Managed reranker:** not added — eval shows the local reranker already gives hit@3 = 1.00, so it isn't needed (as the roadmap predicted).
+- **Remaining:** wire registry push + deploy into CI (needs cloud creds); optional distributed tracing dashboards.
 
 ---
 
