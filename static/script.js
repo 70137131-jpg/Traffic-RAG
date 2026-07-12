@@ -5,12 +5,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const sourcesContainer = document.getElementById('sources-container');
     const typingIndicator = document.getElementById('typing-indicator');
 
+    const botAvatarSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bot"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>`;
+    const userAvatarSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
+
     function scrollToBottom() {
         chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
     function showTyping() {
-        // Move typing indicator to the end of chat history
         chatHistory.appendChild(typingIndicator);
         typingIndicator.style.display = 'flex';
         scrollToBottom();
@@ -23,9 +25,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function addMessage(text, isUser) {
         const div = document.createElement('div');
         div.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
-        div.textContent = text;
 
-        // Insert before typing indicator if it exists
+        const avatar = document.createElement('div');
+        avatar.className = 'message-avatar';
+        avatar.innerHTML = isUser ? userAvatarSVG : botAvatarSVG;
+
+        const content = document.createElement('div');
+        content.className = 'message-content';
+        content.textContent = text;
+
+        div.appendChild(avatar);
+        div.appendChild(content);
+
         if (typingIndicator.parentNode === chatHistory && typingIndicator.style.display !== 'none') {
             chatHistory.insertBefore(div, typingIndicator);
         } else {
@@ -38,14 +49,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateSources(sources) {
         sourcesContainer.innerHTML = '';
         if (!sources || sources.length === 0) {
-            sourcesContainer.innerHTML = '<p class="placeholder-text">No specific laws cited.</p>';
+            sourcesContainer.innerHTML = `
+                <div class="empty-state">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-book-open"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                    <p>No specific laws cited for this query.</p>
+                </div>`;
             return;
         }
 
         sources.forEach((source, index) => {
             const card = document.createElement('div');
             card.className = 'source-card';
-            card.style.animationDelay = `${index * 0.1}s`; // Staggered animation
+            card.style.animationDelay = `${index * 0.1}s`;
 
             const meta = document.createElement('div');
             meta.className = 'source-meta';
@@ -70,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
         addMessage(text, true);
         input.value = '';
 
-        showTyping(); // Show animation
+        showTyping();
 
         try {
             const response = await fetch('/ask', {
@@ -86,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.error || "Request failed");
             }
 
-            hideTyping(); // Hide animation
+            hideTyping();
             addMessage(data.answer, false);
             updateSources(data.sources);
 
@@ -106,6 +121,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('file-upload');
     const docLabel = document.getElementById('current-doc-label');
 
+    function updateDocLabel(text, statusColor = null) {
+        let span = docLabel.querySelector('.truncate-text');
+        if (!span) {
+            // Re-create the span if it was somehow removed
+            span = document.createElement('span');
+            span.className = 'truncate-text';
+            docLabel.appendChild(span);
+        }
+        span.textContent = text;
+        if (statusColor) {
+            span.style.color = statusColor;
+        } else {
+            span.style.color = 'var(--text-primary)';
+        }
+    }
+
     if (fileInput) {
         fileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
@@ -114,9 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const formData = new FormData();
             formData.append('file', file);
 
-            // Show loading state
-            docLabel.textContent = "Uploading & Indexing...";
-            docLabel.style.color = "#f59e0b"; // Warning color
+            updateDocLabel("Uploading & Indexing...", "#ECC94B"); // Yellow
 
             try {
                 const response = await fetch('/upload', {
@@ -127,20 +156,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await response.json();
 
                 if (response.ok) {
-                    docLabel.textContent = `Active: ${data.filename}`;
-                    docLabel.style.color = "#00ff88"; // Success color
+                    updateDocLabel(data.filename, "#48BB78"); // Green
                     addMessage(`System: Successfully switched knowledge base to "${data.filename}".`, false);
                 } else {
                     throw new Error(data.error || "Upload failed");
                 }
             } catch (error) {
                 console.error('Upload Error:', error);
-                docLabel.textContent = "Error Uploading";
-                docLabel.style.color = "#ef4444"; // Error color
+                updateDocLabel("Error Uploading", "#F56565"); // Red
                 addMessage(`System: Error uploading file. ${error.message}`, false);
             }
 
-            // Reset input
             fileInput.value = '';
         });
     }
