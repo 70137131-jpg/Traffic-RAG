@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+
+.env
+.venv/
+venv/
+
+uploads/
+chroma_db/
+
+.ipynb_checkpoints/

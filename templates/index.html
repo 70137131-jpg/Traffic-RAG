@@ -1,0 +1,77 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo-Veridia TrafficBot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="main-container">
+        <div class="chat-container">
+            <div class="header">
+                <div class="avatar-container">
+                    <img src="{{ url_for('static', filename='neo_veridia_robot_avatar.png') }}" alt="Bot Avatar"
+                        class="avatar">
+                    <div class="status-dot"></div>
+                </div>
+                <div class="title-container">
+                    <h1>TrafficBot</h1>
+                    <p>Neo-Veridia's #1 Legal Assistant</p>
+                </div>
+            </div>
+
+            <!-- Upload Controls -->
+            <div class="upload-bar">
+                <span id="current-doc-label">Active: traffic_laws.md</span>
+                <label for="file-upload" class="upload-btn">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Upload Doc
+                </label>
+                <input id="file-upload" type="file" accept=".md,.txt" style="display: none;">
+            </div>
+
+            <div class="chat-history" id="chat-history">
+                <div class="message bot-message">
+                    Hello! I'm TrafficBot. Ask me anything about Neo-Veridia's traffic laws.
+                </div>
+            </div>
+
+            <!-- Typing Indicator (Hidden by default) -->
+            <div class="typing-indicator" id="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+
+            <div class="input-area">
+                <input type="text" id="user-input" placeholder="Type your question here..." autocomplete="off">
+                <button id="send-btn">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <h2>Retrieval Insights</h2>
+            <div id="sources-container" class="sources-container">
+                <p class="placeholder-text">Ask a question to see which laws I'm reading!</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
