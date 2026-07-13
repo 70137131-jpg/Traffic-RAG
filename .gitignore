@@ -4,6 +4,10 @@ __pycache__/
 .env
 .venv/
 venv/
+venv312/
+
+AGENTS.md
+server.log
 
 uploads/
 chroma_db/
