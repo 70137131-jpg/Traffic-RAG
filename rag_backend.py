@@ -61,6 +61,7 @@ from tenacity import (  # noqa: E402
 )
 
 import pg_store  # noqa: E402
+from tracing import tracer  # noqa: E402  (no-op span tracer until tracing is enabled)
 
 
 def _env_int(name, default):
@@ -164,8 +165,10 @@ class RAGService:
         return self._ready
 
     def _ensure_ready(self):
-        """Lazily build models/schema once. The lock only guards one-time init,
-        never the per-request answer path."""
+        """Lazily build the retrieval models/schema once (embedder, reranker, DB
+        schema). The Gemini LLM is built separately and lazily — see _ensure_llm —
+        so ingestion and retrieval work without a GOOGLE_API_KEY. The lock only
+        guards one-time init, never the per-request answer path."""
         if self._ready:
             return True
         with self._init_lock:
@@ -176,12 +179,6 @@ class RAGService:
                 if RERANK_ENABLED and self.reranker is None:
                     from sentence_transformers import CrossEncoder
                     self.reranker = CrossEncoder(RERANKER_MODEL, device=EMBEDDING_DEVICE or None)
-                if self.llm is None:
-                    self.llm = ChatGoogleGenerativeAI(
-                        model=LLM_MODEL, temperature=0,
-                        timeout=LLM_TIMEOUT, max_retries=0,
-                    )
-                    self.rag_chain = self._build_chain()
                 pg_store.ensure_schema(EMBEDDING_DIM)
             except Exception:
                 logger.exception("Failed to initialize RAG service")
@@ -196,6 +193,26 @@ class RAGService:
 
             self._ready = True
             return True
+
+    def _ensure_llm(self):
+        """Lazily build the Gemini LLM + chain on the first answer. Kept out of
+        _ensure_ready so ingestion and retrieval never require a GOOGLE_API_KEY;
+        only answer generation does."""
+        if self.rag_chain is not None:
+            return True
+        with self._init_lock:
+            if self.rag_chain is not None:
+                return True
+            try:
+                self.llm = ChatGoogleGenerativeAI(
+                    model=LLM_MODEL, temperature=0,
+                    timeout=LLM_TIMEOUT, max_retries=0,
+                )
+                self.rag_chain = self._build_chain()
+            except Exception:
+                logger.exception("Failed to initialize the LLM")
+                return False
+        return True
 
     @staticmethod
     def _build_embedder():
@@ -267,9 +284,13 @@ class RAGService:
             retrieved = self._retrieve(active["id"], query)
             if not retrieved:
                 return self._msg("I couldn't find any relevant information in the document.")
-            response = self._invoke_chain(
-                self._format_docs(retrieved), query, active["name"]
-            )
+            if not self._ensure_llm():
+                return self._msg("The answer generator is unavailable. Check GOOGLE_API_KEY and the logs.")
+            with tracer.start_as_current_span("rag.generate") as span:
+                span.set_attribute("rag.context_chunks", len(retrieved))
+                response = self._invoke_chain(
+                    self._format_docs(retrieved), query, active["name"]
+                )
         except Exception:
             logger.exception("Error answering query")
             return self._msg("I encountered an error while answering. Please try again.")
@@ -290,18 +311,23 @@ class RAGService:
         Used by answering (top_k=RERANK_TOP_K) and by the eval harness (larger
         top_k, to measure rank-based metrics like MRR).
         """
-        query_embedding = self.embedder.embed_query(query)
-        candidates = pg_store.hybrid_search(
-            document_id, query, query_embedding,
-            arm_k=ARM_TOP_K, rrf_k=RRF_K, candidates=HYBRID_CANDIDATES,
-        )
+        with tracer.start_as_current_span("rag.embed_query"):
+            query_embedding = self.embedder.embed_query(query)
+        with tracer.start_as_current_span("rag.hybrid_search") as span:
+            candidates = pg_store.hybrid_search(
+                document_id, query, query_embedding,
+                arm_k=ARM_TOP_K, rrf_k=RRF_K, candidates=HYBRID_CANDIDATES,
+            )
+            span.set_attribute("rag.candidates", len(candidates))
         if not candidates:
             return []
         if not RERANK_ENABLED or self.reranker is None:
             return candidates[:top_k]
-        pairs = [[query, c["content"]] for c in candidates]
-        scores = self.reranker.predict(pairs)
-        ranked = sorted(zip(candidates, scores), key=lambda item: item[1], reverse=True)
+        with tracer.start_as_current_span("rag.rerank") as span:
+            span.set_attribute("rag.reranked_from", len(candidates))
+            pairs = [[query, c["content"]] for c in candidates]
+            scores = self.reranker.predict(pairs)
+            ranked = sorted(zip(candidates, scores), key=lambda item: item[1], reverse=True)
         return [c for c, _score in ranked[:top_k]]
 
     @retry(
