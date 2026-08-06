@@ -21,6 +21,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 import pg_store
+import tracing
 from rag_backend import EMBEDDING_DIM, get_answer, process_new_document, rag_system
 
 
@@ -105,6 +106,9 @@ limiter = Limiter(
 # per-endpoint request latency + counts; plus a custom /ask outcome counter.
 metrics = PrometheusMetrics(app, path=None, group_by="path")
 ASK_OUTCOMES = Counter("rag_ask_total", "Answers served by /ask, by outcome", ["outcome"])
+
+# Distributed tracing (opt-in via OTEL_ENABLED). No-op otherwise.
+tracing.setup_tracing(app)
 
 
 # Create the DB schema at startup so read endpoints (/ready, /documents) work

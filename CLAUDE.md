@@ -29,6 +29,7 @@ curl -s http://127.0.0.1:5000/health      # liveness: {"status":"ok","ready":<bo
 curl -s http://127.0.0.1:5000/ready       # readiness: DB reachable + active document (503 if DB down)
 curl -s http://127.0.0.1:5000/documents   # list ingested documents + status
 curl -s http://127.0.0.1:5000/metrics     # Prometheus metrics (request latency/counts, rag_ask_total)
+OTEL_ENABLED=1 python app.py              # OpenTelemetry tracing (console exporter; set OTEL_EXPORTER_OTLP_ENDPOINT for a collector)
 
 # Eval harness + CI regression gate (retrieval-only, works without a valid LLM key)
 python -m eval.run_eval --k 3 --min-hit-rate 0.8   # exits non-zero if hit@k below threshold
@@ -70,7 +71,7 @@ A Flask app that answers questions against a single active document using a hybr
 
 - `GOOGLE_API_KEY` is required **only** for Gemini answer generation (and for Google embeddings if enabled). With the default local embeddings + reranker, retrieval works without it — a bad/leaked key fails only at the generation step. Rotate any key ever committed.
 - All models, chunk sizes, top-k values, RRF constant, embedding provider/dim, DB URL, and LLM timeout/retries are env-overridable config at the top of `rag_backend.py` / `pg_store.py`; see `.env.example`.
-- Roadmap: [docs/PRODUCTION_ROADMAP.md](docs/PRODUCTION_ROADMAP.md). **Phase 0** (deps, gunicorn, logging, health, LLM timeout/retry, RRF, chunk cap), **Phase 1** (Postgres + pgvector, stateless, SQL hybrid search), **Phase 2 code** (Dockerfile, security headers, CORS lockdown, rate limiting, optional `APP_API_KEY`, ProxyFix), and **Phase 3 core** (eval harness + CI regression gate, Prometheus `/metrics`) are done. Remaining: actually deploying (build/push image, provision managed Postgres, IAP), wiring deploy into CI, and optional distributed tracing.
+- Roadmap: [docs/PRODUCTION_ROADMAP.md](docs/PRODUCTION_ROADMAP.md). **Phase 0** (deps, gunicorn, logging, health, LLM timeout/retry, RRF, chunk cap), **Phase 1** (Postgres + pgvector, stateless, SQL hybrid search), **Phase 2 code** (Dockerfile, security headers, CORS lockdown, rate limiting, optional `APP_API_KEY`, ProxyFix), and **Phase 3** (eval harness + CI regression gate, Prometheus `/metrics`, OpenTelemetry tracing) are done. Remaining is deployment only (build/push image, provision managed Postgres, IAP, wire deploy into CI) — needs cloud credentials, not code. Tracing is opt-in via `OTEL_ENABLED`; see [tracing.py](tracing.py).
 - **Eval harness** ([eval/](eval/)): `python -m eval.run_eval` scores retrieval hit@k/MRR against the real pgvector pipeline and gates CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)). Retrieval-only, so it runs without a valid LLM key. Add cases to [eval/dataset.json](eval/dataset.json) when changing chunking/fusion/prompts.
 - **Phase 2 hardening is env-gated** — see the "Phase 2 hardening" block in `.env.example` and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Rate limiting is on by default (probes exempt); CORS, `APP_API_KEY`, HSTS, and ProxyFix are off/permissive by default so local dev and the browser UI work unchanged.
 - **Local gunicorn on macOS:** set `EMBEDDING_DEVICE=cpu` — forking workers crash if the model initializes Metal/MPS. Production (Linux) is CPU-only, and the `Dockerfile` sets this already.

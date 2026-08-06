@@ -209,10 +209,11 @@ Deliberately lightweight — no per-tenant isolation needed:
 
 ### Phase 3 — Operate & measure ✅ core DONE
 - **Eval harness** ([eval/run_eval.py](../eval/run_eval.py)) — golden Q&A set ([eval/dataset.json](../eval/dataset.json), 12 cases across all 7 titles) scoring retrieval hit@1/hit@k/MRR against the real pgvector pipeline. Runs **without the LLM** (retrieval-only), so it works despite the leaked key; optional `--with-answers` scores answer faithfulness once a key is live. **Regression gate:** exits non-zero if hit@k < threshold (verified: exit 0 pass / exit 1 fail). Local run: hit@3 = 1.00, hit@1 = 0.92, MRR = 0.958.
-- **Metrics** — Prometheus `/metrics` (prometheus-flask-exporter): per-endpoint request latency + counts, plus a custom `rag_ask_total{outcome}` counter. Exempt from rate limiting/auth. (Tracing via OpenTelemetry/LangSmith is the remaining nice-to-have.)
+- **Metrics** — Prometheus `/metrics` (prometheus-flask-exporter): per-endpoint request latency + counts, plus a custom `rag_ask_total{outcome}` counter. Exempt from rate limiting/auth.
+- **Distributed tracing** ([tracing.py](../tracing.py)) — OpenTelemetry, opt-in via `OTEL_ENABLED` (no-op otherwise). Spans wrap each pipeline stage (`rag.embed_query` → `rag.hybrid_search` → `rag.rerank` → `rag.generate`) nested under the Flask request span, with exceptions recorded on the span. OTLP exporter for production (point at any collector), console exporter for local debugging; probes/metrics excluded. Verified locally via the console exporter.
 - **CI** ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) — spins up `pgvector/pgvector:pg16`, runs the eval gate on every push/PR, and **builds the Docker image** (the build validation that couldn't run locally without Docker).
 - **Managed reranker:** not added — eval shows the local reranker already gives hit@3 = 1.00, so it isn't needed (as the roadmap predicted).
-- **Remaining:** wire registry push + deploy into CI (needs cloud creds); optional distributed tracing dashboards.
+- **Remaining (needs cloud creds, not code):** wire registry push + deploy into CI; stand up a trace collector/dashboard (Tempo/Honeycomb/etc.) and set `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 ---
 
