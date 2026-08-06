@@ -9,6 +9,9 @@ gunicorn==26.0.0
 # Config / env
 python-dotenv==1.2.2
 
+# Dataset preparation
+pypdf==6.14.2
+
 # RAG pipeline (LangChain 1.x — migrated off the sunset langchain-community paths)
 langchain-core==1.4.9
 langchain-text-splitters==1.1.2

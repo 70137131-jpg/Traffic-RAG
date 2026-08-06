@@ -10,6 +10,7 @@ import logging
 import os
 
 import numpy as np
+from psycopg import errors
 from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -23,6 +24,19 @@ _pool = None
 
 
 def _configure(conn):
+    """Install pgvector before registering its Python adapter.
+
+    ``register_vector`` queries PostgreSQL for the ``vector`` type. On a fresh
+    database that type does not exist until ``CREATE EXTENSION`` has run, so
+    registering first prevents the pool from ever yielding a connection.
+    """
+    try:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.commit()
+    except errors.UniqueViolation:
+        # Two workers can both see a fresh database and issue CREATE EXTENSION.
+        # The other transaction created it first, so reuse that extension.
+        conn.rollback()
     register_vector(conn)
 
 

@@ -4,6 +4,44 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatHistory = document.getElementById('chat-history');
     const sourcesContainer = document.getElementById('sources-container');
     const typingIndicator = document.getElementById('typing-indicator');
+    const latencyMeter = document.getElementById('latency-meter');
+    const statusIndicator = document.getElementById('status-indicator');
+    const statusLabel = document.getElementById('status-label');
+    const suggestions = document.getElementById('suggested-questions');
+    const sidebar = document.getElementById('sidebar');
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const newConversationBtn = document.getElementById('new-conversation-btn');
+    let isSending = false;
+
+    function setLatency(milliseconds, isMeasuring = false) {
+        const label = latencyMeter.querySelector('span');
+        latencyMeter.classList.toggle('is-measuring', isMeasuring);
+        latencyMeter.classList.toggle('is-slow', !isMeasuring && milliseconds >= 3000);
+        label.textContent = isMeasuring
+            ? 'Response: measuring...'
+            : `Response: ${milliseconds < 1000 ? `${Math.round(milliseconds)} ms` : `${(milliseconds / 1000).toFixed(1)} s`}`;
+    }
+
+    function setSystemStatus(state, label) {
+        statusIndicator.classList.remove('is-ready', 'is-warning', 'is-error');
+        statusIndicator.classList.add(`is-${state}`);
+        statusLabel.textContent = label;
+    }
+
+    async function refreshSystemStatus() {
+        try {
+            const response = await fetch('/ready');
+            const data = await response.json();
+            if (!response.ok) throw new Error('Service unavailable');
+            setSystemStatus(data.document ? 'ready' : 'warning', data.document ? 'System ready' : 'No document loaded');
+        } catch (error) {
+            setSystemStatus('error', 'System unavailable');
+        }
+    }
+
+    function formatTimestamp() {
+        return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date());
+    }
 
     const botAvatarSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bot"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>`;
     const userAvatarSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
@@ -32,7 +70,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const content = document.createElement('div');
         content.className = 'message-content';
-        content.textContent = text;
+        const messageText = document.createElement('div');
+        messageText.className = 'message-text';
+        messageText.textContent = text;
+        const footer = document.createElement('div');
+        footer.className = 'message-footer';
+        const timestamp = document.createElement('time');
+        timestamp.textContent = formatTimestamp();
+        footer.appendChild(timestamp);
+        if (!isUser) {
+            const copyButton = document.createElement('button');
+            copyButton.className = 'copy-answer-btn';
+            copyButton.type = 'button';
+            copyButton.textContent = 'Copy';
+            copyButton.addEventListener('click', async () => {
+                await navigator.clipboard.writeText(text);
+                copyButton.textContent = 'Copied';
+                setTimeout(() => { copyButton.textContent = 'Copy'; }, 1500);
+            });
+            footer.appendChild(copyButton);
+        }
+        content.append(messageText, footer);
 
         div.appendChild(avatar);
         div.appendChild(content);
@@ -70,22 +128,40 @@ document.addEventListener('DOMContentLoaded', () => {
             meta.textContent = metaText;
 
             const content = document.createElement('div');
+            content.className = 'source-content is-collapsed';
             content.textContent = source.content;
 
             card.appendChild(meta);
             card.appendChild(content);
+            if (source.content.length > 220) {
+                const toggle = document.createElement('button');
+                toggle.type = 'button';
+                toggle.className = 'source-toggle';
+                toggle.textContent = 'Show more';
+                toggle.addEventListener('click', () => {
+                    const expanded = content.classList.toggle('is-collapsed');
+                    toggle.textContent = expanded ? 'Show more' : 'Show less';
+                });
+                card.appendChild(toggle);
+            }
             sourcesContainer.appendChild(card);
         });
     }
 
     async function sendMessage() {
         const text = input.value.trim();
-        if (!text) return;
+        if (!text || isSending) return;
 
+        isSending = true;
+        sendBtn.disabled = true;
+        input.disabled = true;
         addMessage(text, true);
         input.value = '';
+        suggestions.hidden = true;
 
         showTyping();
+        const requestStartedAt = performance.now();
+        setLatency(0, true);
 
         try {
             const response = await fetch('/ask', {
@@ -109,6 +185,12 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Error:', error);
             hideTyping();
             addMessage("Sorry, I encountered an error connecting to the server.", false);
+        } finally {
+            setLatency(performance.now() - requestStartedAt);
+            isSending = false;
+            sendBtn.disabled = false;
+            input.disabled = false;
+            input.focus();
         }
     }
 
@@ -117,9 +199,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') sendMessage();
     });
 
+    suggestions.addEventListener('click', (event) => {
+        const question = event.target.dataset.question;
+        if (!question) return;
+        input.value = question;
+        sendMessage();
+    });
+
+    newConversationBtn.addEventListener('click', () => {
+        chatHistory.querySelectorAll('.message, .suggested-questions').forEach((element) => element.remove());
+        addMessage('Hello! I’m TrafficBot. Ask a question about the traffic laws in your active document.', false);
+        suggestions.hidden = false;
+        chatHistory.appendChild(suggestions);
+        updateSources([]);
+        setLatency(0);
+        input.focus();
+    });
+
+    sidebarToggle.addEventListener('click', () => {
+        const open = sidebar.classList.toggle('is-open');
+        sidebarToggle.setAttribute('aria-expanded', String(open));
+        sidebarToggle.textContent = open ? 'Close sources' : 'Sources';
+    });
+
     // File Upload Handling
     const fileInput = document.getElementById('file-upload');
     const docLabel = document.getElementById('current-doc-label');
+    const uploadButton = document.querySelector('label[for="file-upload"]');
 
     function updateDocLabel(text, statusColor = null) {
         let span = docLabel.querySelector('.truncate-text');
@@ -146,6 +252,8 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('file', file);
 
             updateDocLabel("Uploading & Indexing...", "#ECC94B"); // Yellow
+            uploadButton.classList.add('is-loading');
+            uploadButton.setAttribute('aria-disabled', 'true');
 
             try {
                 const response = await fetch('/upload', {
@@ -158,6 +266,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (response.ok) {
                     updateDocLabel(data.filename, "#48BB78"); // Green
                     addMessage(`System: Successfully switched knowledge base to "${data.filename}".`, false);
+                    refreshSystemStatus();
                 } else {
                     throw new Error(data.error || "Upload failed");
                 }
@@ -168,6 +277,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             fileInput.value = '';
+            uploadButton.classList.remove('is-loading');
+            uploadButton.removeAttribute('aria-disabled');
         });
     }
+
+    refreshSystemStatus();
 });
