@@ -6,11 +6,13 @@ that fuses a pgvector semantic arm and a tsvector keyword arm with Reciprocal Ra
 Fusion; the app layer only reranks (optional) and generates.
 """
 
+import atexit
 import logging
 import os
+import threading
 
 import numpy as np
-from psycopg import errors
+import psycopg
 from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -21,37 +23,43 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql:///traffic_rag_dev")
 
 _pool = None
+_pool_lock = threading.Lock()
 
 
 def _configure(conn):
-    """Install pgvector before registering its Python adapter.
-
-    ``register_vector`` queries PostgreSQL for the ``vector`` type. On a fresh
-    database that type does not exist until ``CREATE EXTENSION`` has run, so
-    registering first prevents the pool from ever yielding a connection.
-    """
+    # The extension is created once in get_pool() before any pool connection is
+    # opened, so register_vector normally just works. The retry is a safety net.
     try:
+        register_vector(conn)
+    except Exception:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.commit()
-    except errors.UniqueViolation:
-        # Two workers can both see a fresh database and issue CREATE EXTENSION.
-        # The other transaction created it first, so reuse that extension.
-        conn.rollback()
-    register_vector(conn)
+        register_vector(conn)
 
 
 def get_pool():
     """Lazily create the shared connection pool (safe across threads/workers)."""
     global _pool
-    if _pool is None:
-        _pool = ConnectionPool(
-            conninfo=DATABASE_URL,
-            min_size=1,
-            max_size=int(os.environ.get("DB_POOL_MAX", "8")),
-            configure=_configure,
-            kwargs={"row_factory": dict_row},
-            open=True,
-        )
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is None:
+            # Ensure the vector extension exists up front, on a single dedicated
+            # connection, so concurrent pool connections don't race on CREATE
+            # EXTENSION (IF NOT EXISTS is not safe under concurrent DDL).
+            with psycopg.connect(DATABASE_URL) as boot:
+                boot.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                boot.commit()
+            pool = ConnectionPool(
+                conninfo=DATABASE_URL,
+                min_size=1,
+                max_size=int(os.environ.get("DB_POOL_MAX", "8")),
+                configure=_configure,
+                kwargs={"row_factory": dict_row},
+                open=True,
+            )
+            atexit.register(pool.close)
+            _pool = pool
     return _pool
 
 

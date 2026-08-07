@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  eval-gate:
+    name: Retrieval eval regression gate
+    runs-on: ubuntu-latest
+
+    # Postgres + pgvector, mirroring the app's storage. The pgvector image ships
+    # the extension; the app's ensure_schema() runs CREATE EXTENSION at startup.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: traffic_rag_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/traffic_rag_dev
+      EMBEDDING_DEVICE: cpu
+      # Retrieval eval never calls the LLM, but the service constructs the client
+      # at startup, which only checks that a key is present (not that it is valid).
+      GOOGLE_API_KEY: ci-dummy-key
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # Cache the HuggingFace model downloads across runs.
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-minilm-crossencoder
+
+      - name: Install dependencies (CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+
+      - name: Run retrieval eval gate
+        run: python -m eval.run_eval --k 3 --min-hit-rate 0.8
+
+  docker-build:
+    name: Build container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Validates the Dockerfile builds (models bake in, deps resolve). Does not
+      # push; wire up registry auth + push on the main branch when deploying.
+      - name: Build image
+        run: docker build -t traffic-rag:${{ github.sha }} .
