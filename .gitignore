@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+.env
+.venv/
+venv/
+venv312/
+
+AGENTS.md
+server.log
+
+uploads/
+chroma_db/
+
+.ipynb_checkpoints/

@@ -1,0 +1,39 @@
+# Direct dependencies, pinned for reproducible builds.
+# For a fully reproducible environment (incl. transitive deps) install from
+# requirements.lock instead:  pip install -r requirements.lock
+
+# Web serving
+flask==3.1.3
+gunicorn==26.0.0
+flask-limiter==4.1.1
+
+# Config / env
+python-dotenv==1.2.2
+
+# Dataset preparation
+pypdf==6.14.2
+
+# RAG pipeline (LangChain 1.x — migrated off the sunset langchain-community paths)
+langchain-core==1.4.9
+langchain-text-splitters==1.1.2
+langchain-huggingface==1.2.2
+langchain-google-genai==4.2.7
+
+# Storage / retrieval
+psycopg[binary]==3.3.4
+psycopg_pool==3.3.1
+pgvector==0.5.0
+numpy==2.5.1
+
+# Models
+sentence-transformers==5.6.0
+
+# Reliability (timeouts/retries on the LLM call)
+tenacity==9.1.4
+
+# Observability
+prometheus-client==0.25.0
+prometheus-flask-exporter==0.23.2
+opentelemetry-sdk==1.43.0
+opentelemetry-instrumentation-flask==0.64b0
+opentelemetry-exporter-otlp-proto-http==1.43.0

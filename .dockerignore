@@ -1,0 +1,19 @@
+# Keep the build context small and never ship local state / secrets.
+.git
+.gitignore
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+chroma_db/
+uploads/*
+!uploads/.gitkeep
+.ipynb_checkpoints/
+*.ipynb
+docs/
+README.md
+CLAUDE.md
+node_modules/
+.DS_Store
+# Note: traffic_laws.md is intentionally kept — it is the default seed document.
